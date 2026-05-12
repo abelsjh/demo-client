@@ -4383,26 +4383,15 @@ function renderLaporan(){
   });
   const topProds=Object.values(prodSales).sort((a,b)=>b.omset-a.omset).slice(0,5);
   // [FIX M2] Perbaiki formula audit: 'seharusnya' harus memasukkan batch langsung ke toko
-  const auditRows=products.map(p=>{
-    const totalTransferIn=transfers.filter(t=>t.productId===p.id&&t.ke==='toko').reduce((s,t)=>s+t.qty,0);
-    // Batch yang lokasi awalnya 'toko' (masuk langsung tanpa transfer)
+  const stockRows=products.map(p=>{
     const allBatches=batches.filter(b=>b.productId===p.id);
-    const transferBatchIds=new Set(transfers.filter(t=>t.productId===p.id&&t.ke==='toko').map(t=>t.batchId));
-    const totalMasukLangsungToko=allBatches
-      .filter(b=>!transferBatchIds.has(b.id)&&(b.qtyToko!==undefined))
-      .reduce((s,b)=>{
-        // Jika batch tidak pernah ada di gudang (qtyGudang awal=0 dan pernah punya stok toko)
-        const pernahDiToko=(b.qtyToko>0)||(b.qty>0&&(b.qtyGudang||0)===0);
-        return s+(pernahDiToko?b.qty:0);
-      },0);
+    const totalMasuk=allBatches.reduce((s,b)=>s+b.qty,0);
     const totalSold=itemsSold.filter(i=>i.productId===p.id).reduce((s,i)=>s+i.qty,0);
-    const totalRetur=(DB.get('returs')||[]).filter(r=>r.productId===p.id).reduce((s,r)=>s+r.qty,0);
-    const totalReturSup=(DB.get('returSupplier')||[]).filter(r=>r.productId===p.id&&r.lokasi==='toko').reduce((s,r)=>s+r.qty,0);
+    const stokGudang=getStokGudang(p.id);
     const stokToko=getStokToko(p.id);
-    const seharusnya=totalTransferIn+totalMasukLangsungToko-totalSold+totalRetur-totalReturSup;
-    const selisih=stokToko-seharusnya;
-    return {nama:p.nama,transferIn:totalTransferIn+totalMasukLangsungToko,sold:totalSold,retur:totalRetur,returSup:totalReturSup,stokToko,seharusnya,selisih};
-  }).filter(r=>r.transferIn>0||r.sold>0);
+    const totalSisa=stokGudang+stokToko;
+    return {nama:p.nama,totalMasuk,sold:totalSold,stokGudang,stokToko,totalSisa};
+  }).filter(r=>r.totalMasuk>0||r.sold>0||r.totalSisa>0);
 
   // [FIX L2] Hitung persentase KPI vs kemarin
   const todayStart=new Date(); todayStart.setHours(0,0,0,0);
@@ -4491,7 +4480,7 @@ function renderLaporan(){
         </div>
       </div>
 
-      <!-- KANAN: Produk Terlaris & Audit Stok -->
+      <!-- KANAN: Produk Terlaris & Laporan Stok -->
       <div style="display:flex;flex-direction:column;gap:14px;max-height:750px">
         <div class="card" style="flex-shrink:0">
           <div class="card-header"><div class="card-icon" style="background:var(--amber-l)">🏆</div><div class="card-header-title">Produk Terlaris</div></div>
@@ -4509,22 +4498,21 @@ function renderLaporan(){
         </div>
 
         <div class="card" style="display:flex;flex-direction:column;flex:1;min-height:0">
-          <div class="card-header"><div class="card-icon" style="background:var(--teal-l)">🔎</div><div class="card-header-title">Audit Stok</div><div style="font-size:12px;color:var(--tm)">Selisih negatif = hilang</div></div>
+          <div class="card-header"><div class="card-icon" style="background:var(--teal-l)">📦</div><div class="card-header-title">Laporan Posisi Stok</div><div style="font-size:12px;color:var(--tm)">Distribusi barang di Gudang & Etalase</div></div>
           <div class="tbl-wrap" style="overflow-y:auto;border:none;border-radius:0;flex:1">
-            ${!auditRows.length?`<div class="empty-state" style="padding:20px"><div class="es-icon">🔍</div><div class="es-text" style="font-size:13px">Belum cukup data untuk audit</div></div>`:`
+            ${!stockRows.length?`<div class="empty-state" style="padding:20px"><div class="es-icon">📦</div><div class="es-text" style="font-size:13px">Belum ada data stok</div></div>`:`
             <table class="tbl">
               <thead style="position:sticky;top:0;background:var(--card);z-index:2;box-shadow:0 1px 0 var(--border)">
-                <tr><th>Produk</th><th>In</th><th>Out</th><th>Sisa</th><th>Harus</th><th>Gap</th><th>Status</th></tr>
+                <tr><th>Produk</th><th>Total Masuk</th><th>Terjual</th><th>📦 Gudang</th><th>🏪 Etalase</th><th>Total Sisa</th></tr>
               </thead>
               <tbody>
-                ${auditRows.map(r=>`<tr style="${r.selisih<0?'background:var(--red-l)':r.selisih>0?'background:var(--amber-l)':''}">
+                ${stockRows.map(r=>`<tr>
                   <td><strong style="font-size:11.5px">${r.nama}</strong></td>
-                  <td class="mono" style="font-size:11.5px">+${r.transferIn}</td>
-                  <td class="mono" style="font-size:11.5px">${r.sold}</td>
-                  <td class="mono" style="font-size:11.5px">${r.stokToko}</td>
-                  <td class="mono" style="font-size:11.5px">${r.seharusnya}</td>
-                  <td class="mono" style="font-size:11.5px;color:${r.selisih===0?'var(--green)':r.selisih<0?'var(--red)':'var(--amber)'}"><strong>${r.selisih>0?'+':''}${r.selisih}</strong></td>
-                  <td style="font-size:10px"><span class="badge ${r.selisih===0?'bg':r.selisih<0?'br':'ba'}">${r.selisih===0?'✓':r.selisih<0?'⚠ Cek':'⚠ +'}</span></td>
+                  <td class="mono" style="font-size:11.5px;color:var(--green)">${r.totalMasuk}</td>
+                  <td class="mono" style="font-size:11.5px;color:var(--red)">${r.sold}</td>
+                  <td class="mono" style="font-size:11.5px;color:var(--amber)"><strong>${r.stokGudang}</strong></td>
+                  <td class="mono" style="font-size:11.5px;color:var(--blue)"><strong>${r.stokToko}</strong></td>
+                  <td class="mono" style="font-size:11.5px"><strong>${r.totalSisa}</strong></td>
                 </tr>`).join('')}
               </tbody>
             </table>`}
@@ -5719,7 +5707,47 @@ function seedDemoData(){
      total:132000,bayar:140000,kembali:8000},
   ];
   DB.set('transactions',txns);
-  DB.set('returs',[]);
+
+  // ── RETURS ──
+  DB.set('returs',[
+    {id:1, nota:'TRX-035', productId:9, batchId:13, batchKode:'2605-BM-02', qty:1, waktu:dAgo(4), alasan:'Salah tipe busi', kondisi:'Bagus', lokasi:'toko'},
+  ]);
+  DB.set('returSupplier',[
+    {id:1, batchId:19, batchKode:'2605-MS-05', productId:15, productNama:'Baut Tap M6x1.0', qty:2, waktu:dAgo(5), lokasi:'gudang', alasan:'Karat', supId:2, supNama:'Makmur Sentosa'},
+    {id:2, batchId:12, batchKode:'2602-BM-04', productId:9, productNama:'Busi NGK', qty:2, waktu:dAgo(30), lokasi:'toko', alasan:'Kemasan rusak', supId:3, supNama:'Bintang Motor'},
+  ]);
+
+  // ── RECALCULATE BATCH STOCKS TO BE 100% MATHEMATICALLY PERFECT ──
+  // Ini menghilangkan red-flags di Buku Besar Stok karena Sisa Sistem == Seharusnya.
+  const _batches = DB.get('batches')||[];
+  const _transfers = DB.get('transfers')||[];
+  const _txns = DB.get('transactions')||[];
+  const _returSup = DB.get('returSupplier')||[];
+  const _returs = DB.get('returs')||[];
+
+  _batches.forEach(b => {
+     let totalSold = 0;
+     _txns.forEach(tx => {
+        if(tx.status==='lunas') {
+           tx.items.forEach(i => { if(i.batchId === b.id) totalSold += i.qty; });
+        }
+     });
+
+     let totalReturIn = 0;
+     _returs.filter(r => r.batchId === b.id).forEach(r => totalReturIn += r.qty);
+
+     let totalReturOut = 0;
+     _returSup.filter(r => r.batchId === b.id).forEach(r => totalReturOut += r.qty);
+
+     let sisa = b.qty - totalSold + totalReturIn - totalReturOut;
+     if(sisa < 0) sisa = 0;
+
+     // Distribusikan sisa ke Gudang & Toko secara logis
+     const originalGudang = b.qtyGudang || 0;
+     b.qtyGudang = Math.min(sisa, originalGudang);
+     b.qtyToko = sisa - b.qtyGudang;
+  });
+  DB.set('batches', _batches);
 
   // Update branding di login screen
   document.getElementById('loginLogo').textContent='🔧';
